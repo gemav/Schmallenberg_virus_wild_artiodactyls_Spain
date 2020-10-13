@@ -1,0 +1,1543 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+Only need to do installation once.
+```{r}
+#install.packages('foreign')
+#install.packages('lme4')
+#install.packages("lattice")
+#install.packages("gmodels")
+#install.packages("irr")
+#install.packages("vcd")
+```
+
+
+```{r}
+library("moments")
+library("tidyverse")
+library("plyr")
+library("dplyr")
+library("MASS")
+library("car")
+library("foreign")
+library("psych")
+library("stats")
+library("Matrix")
+library("lme4")
+library("lattice")
+library("gmodels") # for CrossTable
+library("irr")
+library("vcd")
+library("lsmeans") # for contrasts
+```
+
+
+Citations
+```{r}
+citation("tidyverse")
+citation("lme4")
+citation("foreign")
+citation("stats")
+citation("vcd")
+citation("arm")
+```
+
+
+-----------------------------------
+GETTING THE DATA READY FOR ANALYSIS
+-----------------------------------
+
+
+Reading the data. First, getting the path from either scratch ("Resultados Cordoba silvestres.sav") or the data frame for analysis ("Dataframe for Analyses.csv")
+```{r}
+path = file.choose()
+```
+
+Reading the file in
+```{r}
+# for data analysis starting from scratch
+df = read.spss(path, to.data.frame = TRUE)
+
+
+# for data analysis after all modifications and to jump to model building
+df = read.csv(path)
+colnames(df)
+# remove the extra column that R created when the dataframe was written to .csv file
+df = df[-c(1, 16)] # Repoblacion
+```
+FROM HERE, GO TO MODEL BUILDING DIRECTLY!!
+
+
+
+RUN THIS PART ONLY IF YOU START FROM THE ORIGINAL FILE ("Resultados Cordoba silvestres.sav")
+```{r}
+#head(df)
+str(df)
+```
+A big part of the data comes from a survey the research group conducts as routine. They use it to study a variety of infectious diseases in wildlife. Therefore, some of the variables are not of interest for this paper.
+
+The data set has already been explored by the author. Continuous variables had been categorized by the author based on either quartiles or similar methods, or based on the accepted agreement in this particular area of research.
+
+After discussion with the author, he decided to remove some of the variables
+
+
+Changing column names to avoid language problems
+```{r}
+colnames(df)[15] = 'Tamano_finca'
+colnames(df)[17] = 'Presencia_Muflon'
+colnames(df)[21] = "Suplementacion_de_alimento"
+colnames(df)[39] = "Rios"
+colnames(df)[40] = "Repoblacion"
+```
+
+
+
+----------------------------------------------
+Descriptive Statistics  |  Univariate Analysis
+----------------------------------------------
+
+This is part of the initial descriptive statistics of the categorical variables. THere is no univariate analysis of continous variables becase all have been previously categorized by the author.
+
+
+Categorical Variables
+```{r}
+sapply(df[c(4:29,33:47,54)], table)
+```
+
+
+After conversation with the author, some variables are going to be left out of the study.
+
+Creating a subset of the variables we are going to consider from now on. Also, "Pastos de montana" was initially considered but finally decided to leave them out due to low frequency.
+
+```{r}
+# taking the subset as a new data frame
+df_2 = df[ , c(7,10:18,20,21,23:25,28,37,38:41,47)]
+
+# double checking the names of the variables
+colnames(df_2)
+
+# observed frequencies of each variable
+sapply(df_2[c(1:22)], table)
+
+# creating a subset with only those observations that have test results
+df_2 = df_2[which(df_2$Result_Final == "Negativo" | df_2$Result_Final == "Positivo"), ]
+
+# observed frequencies of each variable
+sapply(df_2[c(1:21)], table)
+```
+
+
+Note two things:
+1. Some variables have three labels but only observations for two categories. We think this has to do with the data coming from SPSS and later data manipulations. So when the data is imported into R, those labels are still there, but with no observations. That will give problems with running Chi-Square test. To avoid the problem, those labels have to be dropped.
+
+2. We are only going to consider observations since 2011-2012 period for further analysis, so previous observations have to be dropped.
+
+
+
+
+Taking the subset of the years where the disease is detected (from 2011 to end of study). I do this first because when I select a subset, I will generate empty labels.
+```{r}
+df_3 = df_2[which(df_2$Temporada == "2011-2012" | df_2$Temporada == "2012-2013" | df_2$Temporada == "2013-2014" | df_2$Temporada == "2014-2015"), ]
+```
+
+
+Dropping all unused levels in the dataframe.
+```{r}
+levels(df_3$Result_Final)
+
+df_3[] <- lapply(df_3, function(x) if(is.factor(x)) factor(x) else x)
+
+levels(df_3$Temporada)
+```
+
+
+
+Observed frequencies
+```{r}
+sapply(df_3[c(1:22)], table)
+```
+
+
+
+Observed frequencies by outcome:
+--------------------------------
+
+```{r}
+colnames(df_3)
+sapply(df_3[3:22], table, df_3[[1]]) # not including coto
+```
+
+Note that some have small number of observations. We need to recaregorize those.
+
+
+
+=> Recategorization of variables: LOOK INTO CATEGORIZING THESE TWO NEW VARIABLES!!!
+
+Densidad de Ciervo
+```{r}
+df_3$Densidad_ciervo_alta = ifelse(df_3$Densidad_ciervo == 'ALTA', 'SI', 'NO')
+
+
+# double-checking
+df_3[which(df_3$Densidad_ciervo_alta == "SI" & df_3$Densidad_ciervo == "MEDIA"), ]
+```
+
+
+Presencia Ovino, Bovino, Caprino
+
+All those observations where all three variables are "NO" are going to be translated into 'no presence of domestic ruminants', otherwise, 'yes presence of domestic ruminants' (if only one of the three is present, is condition enough to say that there are domestic ruminants)
+```{r}
+df_3$Presencia_rum_domes = ifelse(df_3$Presencia_bovino == 'NO' & df_3$Presencia_caprino == 'NO' & df_3$Presencia_ovino == 'NO', 'NO', 'SI')
+
+# double-checking for mistakes
+df_3[which(df_3$Presencia_rum_domes == "SI" & df_3$Presencia_caprino == "NO" & df_3$Presencia_ovino == "NO" & df_3$Presencia_bovino == "NO"), ]
+```
+
+
+Filtering one more time the variables we are going to study (we created some new variables above, so removing those they were generated from).
+
+Dropping variables "Presencia_ovino" [10], "Presencia_bovino" [17], "Presencia_caprino" [18], "Densidad_ciervo" [15]
+
+```{r}
+colnames(df_3) # double-check the position of variables in data frame
+df_4 = df_3[ , -c(10,17,18,15)]
+```
+
+
+
+Observed frequencies by outcome after reparametrization:
+
+```{r}
+colnames(df_4)
+lapply(df_4[3:20], table, df_4[[1]])
+```
+
+
+
+------------------------------------------
+ASSOCIATIONS BETWEEN VARIABLES AND OUTCOME
+------------------------------------------
+
+Chi-Square test for independence
+H_0 = both categorical variables are independent, they are not related.
+
+
+For those with enough number of observations
+```{r}
+lapply(df_4[c(4:9,11:15,17:20)], function(i) summary(xtabs(~ i + Result_Final, data = df_4)))
+```
+
+
+For those with less than 5 observations: Fisher's exact test.
+```{r}
+lapply(df_4[c(2,10,16)], function(i) fisher.test(df_4[,i], df_4$Result_Final, alternative = 'two.sided'))
+
+sapply(df_4[c(2,10,16)], fisher.test, df_4[[1]])
+```
+
+
+
+```{r}
+fisher.test(df_4$Species, df_4$Result_Final, alternative = 'two.sided')
+
+
+fisher.test(df_4$Aguas_estancadas, df_4$Result_Final, alternative = 'two.sided')
+
+
+fisher.test(df_4$Repoblacion, df_4$Result_Final, alternative = 'two.sided')
+```
+
+After running the test for independence, Aguas estancadas drops from the analysis. Repoblacion is also non significantly associated with the outcome (Chi-square p-value = 0.4596)
+```{r}
+colnames(df_4)
+df_5 = df_4[, -c(10)]
+colnames(df_5)
+
+write.csv(df_5, "Dataframe for Analyses.csv")
+```
+
+
+
+To create all possible pairwise combinations, we first use combn(). The trick here is to generate an output that can be read in another function. The functions that run Chi-Square tests are xtabs() and CrossTable(). Whichever we use, at some point, the function has to go back to the original dataframe and extract observed frequencies. The best way to do this is by using indexes (of course!).
+
+BEWARE: this generates 171 possible combinations. It is not practical to look one by one all of them. We have to consider altertave ways of dimention reduction.
+
+I created a function for this task (the function is based on the one here http://r.789695.n4.nabble.com/Calculating-all-possible-ratios-td4627405.html)
+
+```{r}
+pairwise.associations.categorical = function(x){
+  
+  # Input: a dataframe of categorical variables ONLY.
+  # Uses the function xtabs to compute Chi Square tests for independence of all possible pairs of variables
+  # Output: a dataframe with Chi-Square test statistic, degrees of freedom, p-value and validity of the test
+  
+  
+  # combination of all possible pairs of columns in the dataframe
+  cmb = combn(ncol(x), 2)
+  
+  
+  # Compute Chi Square test for independence using the summary of xtabs()
+  # and taking from the output the things we are interested in to create a data frame
+  chisq_statistic = round(apply(cmb, 2, function(i) summary(xtabs(~ x[,i[1]] + x[,i[2]]))[[3]]), 2)
+  chisq_dfreedom = apply(cmb, 2, function(i) summary(xtabs(~ x[,i[1]] + x[,i[2]]))[[4]])
+  chisq_pvalue = apply(cmb, 2, function(i) summary(xtabs(~ x[,i[1]] + x[,i[2]]))[[6]])
+  chisq_correct = apply(cmb, 2, function(i) summary(xtabs(~ x[,i[1]] + x[,i[2]]))[[5]])
+  
+  
+  # Now, we need the names of the variables that are being tested for clarity of output
+  # The output of cmb has columns and row. First row, has the index of the variable in
+  # the dataframe. Second row, has the index of the other variable in the dataframe.
+  names_var1 = apply(cmb, 2, function(i) colnames(x)[i[[1]]])
+  names_var2 = apply(cmb, 2, function(i) colnames(x)[i[[2]]])
+  
+  # Pasting the names together as one string.
+  names_pairs = sapply(seq(1:(length(cmb)/2)), function(i) paste(names_var1[i], names_var2[i], sep = ":"))
+  
+  
+  # Creating the output that is a dataframe, sorted in ascending order by p-value
+  # Also keeping the ones for which Chi Square is not approprite in case we want them.
+  output = data.frame(names_pairs, chisq_statistic, chisq_dfreedom, chisq_pvalue, chisq_correct)
+  output = arrange(output, chisq_correct, chisq_pvalue)
+  
+  return(output)
+  
+}
+```
+
+
+Using the function in our dataframe.
+```{r}
+all_comb_chisq = pairwise.associations.categorical(df_5)
+all_comb_chisq
+
+
+write.csv(all_comb_chisq, "All Pairwise Chi Square SCV.csv")
+```
+After looking at the excel/csv file, all the ones for which chi-square is not appropriate are those comparisons using Coto and Repoblacion. For Coto, does not matter, since that variable is going to go as random effect. For Repoblacion, with the 2x2 tables we already saw that has low frequencies and is going to be dropped from further analyses. We decided the same thing with Aguas Estancadas, but for some reason, that one did get dropped but not Repoblacion. 
+
+
+
+
+What are the relationships between categorical variables (with each other)?
+
+There are more than one way to look at that:
+- Agreement beyond chance: Cohen's Kappa (our dataframe is not in the appropriate format for that, but can be changed)
+- Significance test: Chi-Square test (done already)
+- Effect Size: Cramer's V (correlation for categorical data. See https://en.wikipedia.org/wiki/Cram%C3%A9r%27s_V): the test statistic is a measure of intercorrelation of two discrete variables and can be use with variables that have two or more levels, and it goes from 0 to 1. For two levels only, we can use phi correlation from package psych. In our case, gives error for all those with more than 2 levels.
+
+
+The following chunk is the calculation of a matrix with the Cramer's V measures of intercorrelation. The function is a copy from the one here https://stats.stackexchange.com/questions/108007/correlations-with-categorical-variables
+
+```{r}
+# the function has as input a string vector of categorical variables you want to correlate and the dataframe where the variables are contained.
+# the output is a matrix of Cramer's V's.
+catcorrm <- function(vars, dat) sapply(vars, function(y) sapply(vars, function(x) assocstats(table(dat[,x], dat[,y]))$cramer))
+
+
+# the function has as input a string vector of categorical variables you want to correlate and the dataframe where the variables are contained. Only variables with two levels can be used here.
+# the output is a matrix of Phi Correlation.
+phicorrm <- function(vars, dat) sapply(vars, function(y) sapply(vars, function(x) phi(table(dat[,x], dat[,y]))))
+```
+
+
+Cramer's V correlation. For categorical variables with two or more levels.
+```{r}
+cramer_corr = as.data.frame(catcorrm(colnames(df_5), df_5))
+?glm?
+write.csv(cramer_corr, "Cramer Correlations.csv")
+```
+
+
+
+```{r}
+# using phi correlation only in those with two levels
+lapply(df_5[c(1:19)], function(i) nlevels(as.factor(i)))
+
+# subset of those variables with only two levels
+phi_corr_df = df_5[c(1,6, 8:16, 18,19)]
+phi_corr = as.data.frame(phicorrm(colnames(phi_corr_df), phi_corr_df))
+
+write.csv(phi_corr, "Phi Correlations.csv")
+```
+
+
+For future references, it also may be useful to check this cheat sheet: http://stats.idre.ucla.edu/other/mult-pkg/whatstat/
+
+
+
+
+
+---------------------------
+REGRESSION MODELS
+---------------------------
+
+
+Setting the reference level for the model
+```{r}
+df$Species <- relevel(df$Species, ref = "Jabal?")
+df$Temporada <- relevel(df$Temporada, ref = "2014-2015")
+df$Age = relevel(df$Age, ref = "Juveniles")
+```
+
+
+
+```{r}
+colnames(df)
+
+# all fixed effects
+lapply(df[c(3:19)], function(i) summary(glm(Result_Final ~ i, data = df, family = "binomial")))
+
+# varying intercepts for each Coto
+lapply(df[c(3:18)], function(i) summary(glmer(Result_Final ~ i + (1 | Coto), data = df, family = "binomial")))
+
+lapply(df[c(3:18)], function(i) summary(glmer(Result_Final ~ i + (1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000)))))
+
+
+lapply(df[c(5,6,10,12,13,16,17)], function(i) summary(glmer(Result_Final ~ i + (1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000)))))
+```
+
+
+Fitting the variables starting with those with smallest p-value (based on logistic regression) for their effect on outcome.
+
+1. Presencia Gamo (p-value: 3.17e-09 | p-value: 3.24e-05 with random effects)
+```{r}
+fit_1 = summary(glm(Result_Final ~ Presencia_Gamo, data = df, family = "binomial"))
+fit_1$coef
+exp(coef(fit_1))
+#exp(confint.default(fit_1))
+
+
+fit_1r = summary(glmer(Result_Final ~ Presencia_Gamo + (1 | Coto), data = df, family = "binomial"))
+str(fit_1r)
+exp(fit_1r$coefficients)
+```
+
+
+
+2. Tamano_finca (p-value: 2.55e-06 | p-value: 0.00119 with random effects). Variable Tamano_finca is moderately correlated with Presencia_Gamo
+```{r}
+fit_2 = summary(glm(Result_Final ~ Presencia_Gamo + Tamano_finca, data = df, family = "binomial"))
+fit_2$coef
+exp(coef(fit_2))
+
+
+fit_2r = summary(glmer(Result_Final ~ Presencia_Gamo + Tamano_finca + (1 | Coto), data = df, family = "binomial"))
+exp(fit_2r$coefficients)
+```
+There is a change in coefficients by more than 20% but less than 30%. It is also correlated with Presencia_Gamo and it is not significant in the model in combination with Presencia_Gamo.
+
+
+
+3. Temporada (p-value: 2.87e-06 | p-value: 5.88e-09 with random effects)
+```{r}
+fit_3 = summary(glm(Result_Final ~ Presencia_Gamo + Tamano_finca + Temporada, data = df, family = "binomial"))
+fit_3$coef
+exp(coef(fit_3))
+
+
+fit_3r = summary(glmer(Result_Final ~ Presencia_Gamo + Tamano_finca + Temporada + (1 | Coto), data = df, family = "binomial"))
+exp(fit_3r$coefficients)
+```
+
+
+3.2. There is some kind of interaction between Tamano_fina and Presencia_Gamo because both by themselves are good predictors of outcome. But when added together, the effect of Tamano_finca is gone.
+
+Checking what happens when fitting either Presencia_Gamo or Tamano_finca with Temporada.
+```{r}
+fit_3.2 = summary(glm(Result_Final ~ Presencia_Gamo + Temporada, data = df, family = "binomial"))
+fit_3.2$coef
+exp(coef(fit_3.2))
+
+
+fit_3.2r = summary(glmer(Result_Final ~ Presencia_Gamo + Temporada + (1 | Coto), data = df, family = "binomial"))
+exp(fit_3.2r$coefficients)
+```
+
+
+3.3. Fitting with Tamano_finca
+```{r}
+fit_3.3 = summary(glm(Result_Final ~ Tamano_finca + Temporada, data = df, family = "binomial"))
+fit_3.3$coef
+exp(coef(fit_3.3))
+
+
+fit_3.3r = summary(glmer(Result_Final ~ Tamano_finca + Temporada + (1 | Coto), data = df, family = "binomial"))
+exp(fit_3.3r$coefficients)
+```
+
+The model has to be compared with a model that only fits Tamano_finca as main exposure
+```{r}
+fit_3.4 = summary(glm(Result_Final ~ Tamano_finca, data = df, family = "binomial"))
+fit_3.4$coef
+exp(coef(fit_3.4))
+
+
+fit_3.4r = summary(glmer(Result_Final ~ Tamano_finca + (1 | Coto), data = df, family = "binomial"))
+exp(fit_3.4r$coefficients)
+```
+
+We will keep fitting models starting with Presencia_Gamo and Temporada.
+
+
+
+4. Presencia_rum_domes (p-value: 2.32e-05 | p-value: 0.00107 with random effects)
+```{r}
+fit_4 = summary(glm(Result_Final ~ Presencia_Gamo + Temporada + Presencia_rum_domes, data = df, family = "binomial"))
+fit_4$coef
+exp(coef(fit_4))
+
+
+fit_4r = summary(glmer(Result_Final ~ Presencia_Gamo + Temporada + Presencia_rum_domes + (1 | Coto), data = df, family = "binomial"))
+exp(fit_4r$coefficients)
+```
+Dropping the variable Presencia_rum_domes for lack of significance in the random effects model
+
+
+
+5. Species (p-value: 2.24e-05 | p-value: 0.00317 with random effects). Moderately correlated with Presencia_Gamo
+```{r}
+fit_5 = summary(glm(Result_Final ~ Presencia_Gamo + Temporada + Species, data = df, family = "binomial"))
+fit_5$coef
+exp(coef(fit_5))
+
+
+fit_5r = summary(glmer(Result_Final ~ Presencia_Gamo + Temporada + Species + (1 | Coto), data = df, family = "binomial"))
+exp(fit_5r$coefficients)
+```
+
+
+
+6. Rios
+```{r}
+fit_6 = summary(glm(Result_Final ~ Presencia_Gamo + Temporada + Species + Rios, data = df, family = "binomial"))
+fit_6$coef
+exp(coef(fit_6))
+
+
+summary(glmer(Result_Final ~ Presencia_Gamo + Temporada + Species + Rios + (1 | Coto), data = df, family = "binomial"))
+```
+After reading the warning for lack of convergence (we do not have a solution for the parameters), and consulting https://stats.stackexchange.com/questions/164457/r-glmer-warnings-model-fails-to-converge-model-is-nearly-unidentifiable 
+there may be a problem with Temporada since the correlation between years is high. 
+
+
+Trying a model without Temporada (not included in the Excel spread sheet, this is just to double check)
+```{r}
+summary(glmer(Result_Final ~ Presencia_Gamo + Species + Rios + (1 | Coto), data = df, family = "binomial"))
+```
+Convergence problem is gone. SO I conclude that it is Temporada the variable that creates the problem.
+
+
+
+At this point, there are three options:
+- try to make Temporada as continuous since it is time.
+- try to recategorize Temporada in two levels: from 2011 - 2013 and 2013 - 2015 since there is a jump after 2013-2014.
+- try to fit the model with different optimizers (see https://www.ibm.com/developerworks/library/ba-optimR-john-nash/index.html?ca=da
+https://stats.stackexchange.com/questions/110004/how-scared-should-we-be-about-convergence-warnings-in-lme4
+https://stats.stackexchange.com/questions/164457/r-glmer-warnings-model-fails-to-converge-model-is-nearly-unidentifiable)
+
+
+Changing Temporada to continuous (new variable created: Temporada_cont)
+```{r}
+levels(df$Temporada)
+
+df$Temporada_cont = ifelse(df$Temporada == "2011-2012", 1, ifelse(df$Temporada == "2012-2013", 2, ifelse(df$Temporada == "2013-2014", 3, 4)))
+
+str(df)
+hist(df$Temporada_cont, breaks = 5, main = "Histogram of Temporada as continuous variable")
+```
+
+
+Using same number of variables as before but using Temporada as continuous instead.
+```{r}
+summary(glmer(Result_Final ~ Temporada_cont + (1 | Coto), data = df, family = "binomial"))
+
+summary(glmer(Result_Final ~ Presencia_Gamo + Temporada_cont + Species + Rios + (1 | Coto), data = df, family = "binomial"))
+```
+In this case, using Temporada as continuous shows that the predictor is not as significant as before.
+
+
+
+Recategorizing Temporada in two categories instead of 4 (new variable created: Temporada_cat2)
+```{r}
+levels(df$Temporada)
+
+df$Temporada_cat2 = as.factor(ifelse(df$Temporada == "2011-2012" | df$Temporada == "2012-2013", 1, 2))
+str(df)
+table(df$Temporada_cat2, df$Result_Final)
+```
+
+
+Using same number of variables as before but using Temporada as categorical with two levels instead.
+```{r}
+summary(glmer(Result_Final ~ Temporada_cat2 + (1 | Coto), data = df, family = "binomial")) #non-significant
+
+summary(glmer(Result_Final ~ Presencia_Gamo + Temporada_cat2 + Species + Rios + (1 | Coto), data = df, family = "binomial")) # non-signigicant
+```
+
+
+
+Using different optimizers. Nelder-Mead optimizer not working.
+```{r}
+summary(glmer(Result_Final ~ Presencia_Gamo + Temporada + Species + Rios + (1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "Nelder_Mead", optCtrl = list(maxfun = 100000))))
+```
+
+
+Using different optimizers. Bobyqa optimizer works.
+```{r}
+fit_6r = summary(glmer(Result_Final ~ Presencia_Gamo + Temporada + Species + Rios + (1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))))
+
+exp(fit_6r$coefficients)
+```
+
+There are no more variables to add to the model since the ones left (Presencia_Muflon, Monte_de_cabeza, Dehesa) were no significant in the bivarite logistic model with coto as random effect.
+
+
+
+What about the variables for which the model did not converge? Would it change if I use a different optimizer?
+```{r}
+colnames(df)
+
+lapply(df[c(5,6,10,12,13,16,17)], function(i) summary(glmer(Result_Final ~ i + (1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000)))))
+```
+There are 3 variables that are significant in the bivariate analysis with random effects: Sexo (p-value: 0.00581), Age (p-value: 0.0137), Densidad_ciervo_alta (p-value: 0.0217).
+
+
+Since Rios is a confounder, I will leave out for now to keep fitting predictors and it will be added at the end.
+
+7. Sexo
+```{r}
+fit_7 = summary(glm(Result_Final ~ Presencia_Gamo + Temporada + Species + Sexo, data = df, family = "binomial"))
+fit_7$coef
+exp(coef(fit_7))
+
+
+
+fit_7r = summary(glmer(Result_Final ~ Presencia_Gamo + Temporada + Species + Sexo + (1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))))
+exp(fit_7r$coefficients)
+# I also tried the same model without specifying the optimization method and it did not converge.
+```
+
+
+
+8. Age
+```{r}
+fit_8r = summary(glmer(Result_Final ~ Presencia_Gamo + Temporada + Species + Sexo + Age +(1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))))
+exp(fit_8r$coefficients)
+```
+
+
+
+9. Densidad_ciervo_alta
+```{r}
+fit_9r = summary(glmer(Result_Final ~ Presencia_Gamo + Temporada + Species + Sexo + Age + Densidad_ciervo_alta +(1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))))
+exp(fit_9r$coefficients)
+```
+Densidad_ciervo_alta is non-signigicant and it is not confounder. It will be dropped from the model.
+
+
+
+------------
+INTERACTIONS
+------------
+
+
+
+```{r}
+# Presencia_Gamo * Temporada; significant
+summary(glmer(Result_Final ~ Presencia_Gamo + Temporada + Species + Sexo + Age + Rios + Presencia_Gamo*Temporada + (1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000)))) #significant interaction between Presencia_Gamo and Temporada
+
+# Presencia_Gamo * Species; non-significant; rank deficient
+summary(glmer(Result_Final ~ Presencia_Gamo + Temporada + Species + Sexo + Age + Rios + Presencia_Gamo*Species + (1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))))
+
+
+# Presencia_Gamo * Sexo; non-significant
+summary(glmer(Result_Final ~ Presencia_Gamo + Temporada + Species + Sexo + Age + Rios + Presencia_Gamo * Sexo + (1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))))
+
+# Presencia_Gamo * Age; non-significant
+summary(glmer(Result_Final ~ Presencia_Gamo + Temporada + Species + Sexo + Age + Rios + Presencia_Gamo * Age + (1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))))
+
+# Presencia_Gamo * Densidad_ciervo_alta; non-significant
+summary(glmer(Result_Final ~ Presencia_Gamo + Temporada + Species + Sexo + Age + Rios + Presencia_Gamo * Densidad_ciervo_alta + (1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))))
+
+# Temporada * Species; not enough data to estimate all the parameters needed.
+summary(glmer(Result_Final ~ Presencia_Gamo + Temporada + Species + Sexo + Age + Rios + Temporada * Species + (1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))))
+
+# Temporada * Sexo; non-significant
+summary(glmer(Result_Final ~ Presencia_Gamo + Temporada + Species + Sexo + Age + Rios + Temporada * Sexo + (1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))))
+
+# Temporada * Age; failed to converge, not enough data when crosstabulation for all the levels at interaction
+summary(glmer(Result_Final ~ Presencia_Gamo + Temporada + Species + Sexo + Age + Rios + Temporada * Age+ (1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))))
+
+# Temporada * Densidad_ciervo_alta; unidentifiable model. large eigenvalue.
+summary(glmer(Result_Final ~ Presencia_Gamo + Temporada + Species + Sexo + Age + Rios + Temporada * Densidad_ciervo_alta + (1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))))
+
+# Species * Sexo; significant interaction between Gamo and Macho
+summary(glmer(Result_Final ~ Presencia_Gamo + Temporada + Species + Sexo + Age + Rios + Species * Sexo + (1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))))
+
+# Species * Age; significant interaction between Gamo and Juveniles
+summary(glmer(Result_Final ~ Presencia_Gamo + Temporada + Species + Sexo + Age + Rios + Species * Age + (1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))))
+
+# Species * Densidad_ciervo_alta; rand defficient. Dropping one column. Do not use for inference.
+summary(glmer(Result_Final ~ Presencia_Gamo + Temporada + Species + Sexo + Age + Rios + Species * Densidad_ciervo_alta + (1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))))
+
+# Sexo * Age; non-significant
+summary(glmer(Result_Final ~ Presencia_Gamo + Temporada + Species + Sexo + Age + Rios + Sexo * Age + (1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))))
+
+# Sexo * Densidad_ciervo_alta; non-significant
+summary(glmer(Result_Final ~ Presencia_Gamo + Temporada + Species + Sexo + Age + Rios + Sexo * Densidad_ciervo_alta + (1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))))
+
+# Age * Densidad_ciervo_alta; non-significant
+summary(glmer(Result_Final ~ Presencia_Gamo + Temporada + Species + Sexo + Age + Rios + Age * Densidad_ciervo_alta + (1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))))
+```
+
+
+After fitting all these models the significant interactions are: Presencia_Gamo*Temporada
+
+Fitting the best model:
+```{r}
+df$Species <- relevel(df$Species, ref = "Jabal?")
+df$Temporada <- relevel(df$Temporada, ref = "2014-2015")
+
+# model without the summary() to get the confidence intervals
+fit_10r = glmer(Result_Final ~ Presencia_Gamo + Temporada + Species + Sexo + Age + Rios + Presencia_Gamo*Temporada + (1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000)))
+x = summary(fit_10r)
+exp(x$coefficients)
+
+
+# compute 95% CI
+cc <- confint(fit_10r, parm = "beta_")
+cc_wald = confint(fit_10r, parm = "beta_", method = "Wald") # less accurate but faster
+
+ctab <- cbind(est = fixef(fit_10r), cc)
+ctab_wald <- cbind(est = fixef(fit_10r), cc_wald)
+
+
+rtab <- exp(ctab)
+rtab_wald <- exp(ctab_wald)
+
+print(rtab, digits=3)
+print(rtab_wald, digits=3)
+
+
+# Computing contrasts using lsmeans package
+# reference grid
+model10_refgrid = ref.grid(fit_10r)
+summary(model10_refgrid)
+
+contrast(model10_refgrid, method = "eff")
+```
+
+
+```{r}
+install.packages("arm")
+library("arm")
+
+binnedplot(fitted(fit_10r), residuals(fit_10r, type = "response"))
+```
+
+
+
+```{r}
+plot(fitted(fit_10r), residuals(fit_10r, type = "response"))
+```
+
+
+
+
+
+
+
+Final check: In the model building process, everything blows up after model fit_5r. The model fit_5r contains Presencia_Gamo + Temporada + Species. When I try to fit Rios, is when does not converge. I want to see if, before adding any other variables, there is a significant interaction between Presencia_Gamo and Temporada.
+```{r}
+fit_5r_int = summary(glmer(Result_Final ~ Presencia_Gamo + Temporada + Species + Presencia_Gamo*Temporada + (1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))))
+
+exp(fit_5r_int$coefficients)
+```
+
+
+
+Plotting Interactions
+```{r}
+# Preparing the data from results
+gamo = c("si", "si", "si" ,"no", "no", "no")
+OR = c(0.06, 23.38, 2.97, 0.62, 1.95, 0.65)
+time = c(1, 2, 3, 1, 2, 3)
+interac = data.frame(gamo, OR, time)
+
+# Plotting
+myplot = ggplot(interac, aes(time, OR, group = gamo, shape = gamo))
+myplot = myplot + geom_line() + geom_point()
+myplot = myplot + labs(x = "Temporada (1 = 2011-2012; 3 = 2013-2014)", y = "OR")
+myplot = myplot + ggtitle("Interaction Between Presencia Gamo and Temporada (ref 2014-2015)")
+myplot
+```
+
+
+I also want to know what happens if the reference level for Temporada is 2011-2012 instead of 2014-2015
+```{r}
+df$Temporada <- relevel(df$Temporada, ref = "2014-2015")
+
+
+fit_10r_relevel = summary(glmer(Result_Final ~ Presencia_Gamo + Temporada + Species + Sexo + Age + Rios + Presencia_Gamo*Temporada + (1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))))
+
+exp(fit_10r_relevel$coefficients)
+
+# model without the summary() to get the confidence intervals
+fit_10r_relevel = glmer(Result_Final ~ Presencia_Gamo + Temporada + Species + Sexo + Age + Rios + Presencia_Gamo*Temporada + (1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000)))
+
+
+str(fit_10r_relevel)
+plot(resid(fit_10r_relevel))
+
+
+#hist((resid(fit_10r_relevel) - mean(resid(fit_10r_relevel))) / sd(resid(fit_10r_relevel)), freq = FALSE); curve(dnorm, add = TRUE)
+
+
+# compute 95% CI
+cc <- confint(fit_10r_relevel, parm = "beta_")
+cc_wald = confint(fit_10r_relevel, parm = "beta_", method = "Wald") # less accurate but faster
+
+ctab <- cbind(est = fixef(fit_10r_relevel), cc)
+ctab_wald <- cbind(est = fixef(fit_10r_relevel), cc_wald)
+
+
+rtab <- exp(ctab)
+rtab_wald <- exp(ctab_wald)
+
+print(rtab, digits=3)
+print(rtab_wald, digits=3)
+```
+
+
+Plotting Interactions when the reference level for Temporada is the first year.
+```{r}
+# Preparing the data from results
+gamo = c("si", "si", "si" ,"no", "no", "no")
+#OR = c(0.06, 6.90, 2.65, 0.59, 1.85, 0.61) WRONG VALUES
+time = c(1, 2, 3, 1, 2, 3)
+interac = data.frame(gamo, OR, time)
+
+# Plotting
+myplot = ggplot(interac, aes(time, OR, group = gamo, shape = gamo))
+myplot = myplot + geom_line() + geom_point()
+myplot = myplot + labs(x = "Temporada (1 = 2011-2012; 3 = 2013-2014)", y = "OR")
+myplot = myplot + ggtitle("Interaction Between Presencia Gamo and Temporada (ref 2014-2015)")
+myplot
+```
+
+
+
+
+-----------
+DIAGNOSTICS
+-----------
+
+
+
+-- THE FOLLOWING HAS BEEN EXTRACTED FROM http://lme4.r-forge.r-project.org/lMMwR/lrgprt.pdf, PAGE 24 --
+We can evaluate a measure of the dispersion of the conditional distribution. The ranef extractor takes an optional argument, postVar = TRUE, which adds these dispersion measures as an attribute of the result. In this case, R suggested to use condVar instead of postVar.
+
+Prediction intervals:
+```{r}
+dotplot(ranef(fit1, condVar = TRUE)) # linear spacing of the levels on the y axis
+qqmath(ranef(fit1, condVar = TRUE)) # intervals are plotted versus quantiles of the standard normal
+```
+Note: dotplot is preferred when there are only a few levels of the grouping factor. When there are hundreds or thousands of random effects the qqmath form is preferred because it focuses attention on the "important few" at the extremes and de-emphasizes the "trivial many" that are close to zero.
+
+
+
+What is the distribution of the different variables by Coto?
+```{r}
+colnames(df_5)
+sapply(df_5[c(1,3:19)], table, df_5[[2]])
+
+lapply(df_4[c(1,3:19)], function(i) summary(xtabs(~ i + Coto, data = df_4)))
+
+#CrossTable(df_5$Coto, df_5$Presencia_Gamo, digits = 3, chisq = TRUE, fisher = TRUE, missing.include = FALSE)
+```
+
+
+
+
+Is the data overdispersed? (the combined residuals are much larger than the residual degrees of freedom)
+-- THE FOLLOWING CODE HAS BEEN EXTRACTED FROM http://ase.tufts.edu/gsc/gradresources/guidetomixedmodelsinr/mixed%20model%20guide.html --
+```{r}
+overdisp_fun <- function(model) {
+    ## number of variance parameters in an n-by-n variance-covariance matrix
+    vpars <- function(m) {
+        nrow(m) * (nrow(m) + 1)/2
+    }
+    # The next two lines calculate the residual degrees of freedom
+    model.df <- sum(sapply(VarCorr(model), vpars)) + length(fixef(model))
+    rdf <- nrow(model.frame(model)) - model.df
+    # extracts the Pearson residuals
+    rp <- residuals(model, type = "pearson")
+    Pearson.chisq <- sum(rp^2)
+    prat <- Pearson.chisq/rdf
+    # Generates a p-value. If less than 0.05, the data are overdispersed.
+    pval <- pchisq(Pearson.chisq, df = rdf, lower.tail = FALSE)
+    c(chisq = Pearson.chisq, ratio = prat, rdf = rdf, p_value = pval)
+}
+```
+
+
+The following function generates a p-value. If less than 0.05, the data are overdispersed
+```{r}
+overdisp_fun(fit_10r)
+```
+For this particular model, the data is a bit overdispersed.
+
+
+```{r}
+coef(fit_2)
+confint(fit_2)
+
+
+# OR and 95% 
+exp(coef(fit_2))
+exp(confint.default(fit_2))
+```
+
+
+Test of Random Parameters
+-------------------------
+Likelihood Ratio Test: the LRT for these variance parameters at times can be poor estimates. We recommend treating these p-values with caution. The LRT test of a variance parameter equalling zero will be conservative (larger p-value)... If the variance parameter being tested is the only variance parameter in the model, the null model will be a fixed effects model.
+http://www.ssc.wisc.edu/sscc/pubs/MM/MM_TestEffects.html
+
+1. create model with the random effect
+2. create model without the random effect
+3. LRT calculated using the loglik() function
+
+G2 = -2 * logLok(simpler model; no random effect) + 2 * logLik(adding random effect)
+pchisq(as.numeric(G2), df = 1, lower.tail = FALSE)
+
+If the p-value is larger than 0.05, the variance associated with the random effect is likely to have occurred by chance.
+
+
+LogLik model with random effects
+```{r}
+random_effect_model = x$logLik
+random_effect_model
+```
+
+LogLik model without random effects
+
+https://stat.ethz.ch/pipermail/r-sig-mixed-models/2009q2/002426.html
+```{r}
+## extract likelihood based on zero variance for a single random
+##  effect
+zerodev <- function(mm) {
+  varprof(mm,0,0,1)[["ML"]]
+}
+
+varprof <- function(mm,lower=0,upper=20,n=101) {
+  sg <- seq(lower, upper, len = n)
+  orig.sd <- attr(VarCorr(mm)[[1]],"stddev")
+  dev <- mm at deviance
+  nc <- length(dev)
+  nms <- names(dev)
+  vals <- matrix(0, nrow = length(sg), ncol = nc, dimnames = list(NULL,
+nms))
+  update_dev <- function(sd) {
+    .Call("mer_ST_setPars", mm, sd, PACKAGE = "lme4")
+    .Call("mer_update_L", mm, PACKAGE = "lme4")
+    res <- try(.Call("mer_update_RX", mm, PACKAGE = "lme4"), silent = TRUE)
+    if (inherits(res, "try-error")) {
+      val <- NA
+    } else {
+      .Call("mer_update_ranef", mm, PACKAGE = "lme4")
+      .Call("mer_update_dev", mm, PACKAGE = "lme4") ## added for glmmML
+      val <- mm at deviance
+    }
+    val
+  }
+  for (i in seq(along = sg)) {
+      vals[i,] <- update_dev(sg[i])
+    }
+  update_dev(orig.sd) ## hack! to restore original sd
+  data.frame(sd=sg,vals)
+}
+```
+
+
+
+Computing 95% CI for the contrasts:
+
+What is the difference between presence of fallow deer in 2011-2012 and no fallow deer in 2011-2012
+```{r}
+coef = coef(summary(fit_10r))
+varcov = vcov(fit_10r)
+vector = c(0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0)
+logRR = t(vector) %*% coef
+RR = exp(logRR)
+RR
+
+se.RR = sqrt(t(vector) %*% varcov %*% vector)
+lower.bound = exp(logRR - (1.96*se.RR))
+lower.bound
+
+upper.bound = exp(logRR + (1.96*se.RR))
+upper.bound
+```
+
+
+What is the difference between presence of fallow deer in 2012-2013 and no fallow deer in 2012-2013?
+```{r}
+vector = c(0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0)
+logRR = t(vector) %*% coef
+RR = exp(logRR)
+RR
+
+se.RR = sqrt(t(vector) %*% varcov %*% vector)
+lower.bound = exp(logRR - (1.96*se.RR))
+lower.bound
+
+upper.bound = exp(logRR + (1.96*se.RR))
+upper.bound
+```
+
+
+What is the difference between presence of fallow deer in 2013-2014 and no fallow deer in 2013-2014?
+```{r}
+vector = c(0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1)
+logRR = t(vector) %*% coef
+RR = exp(logRR)
+RR
+
+se.RR = sqrt(t(vector) %*% varcov %*% vector)
+lower.bound = exp(logRR - (1.96*se.RR))
+lower.bound
+
+upper.bound = exp(logRR + (1.96*se.RR))
+upper.bound
+```
+
+
+What is the difference between presence of fallow deer in 2014-2015 and no fallow deer in 2014-2015?
+```{r}
+vector = c(0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)
+logRR = t(vector) %*% coef
+RR = exp(logRR)
+RR
+
+se.RR = sqrt(t(vector) %*% varcov %*% vector)
+lower.bound = exp(logRR - (1.96*se.RR))
+lower.bound
+
+upper.bound = exp(logRR + (1.96*se.RR))
+upper.bound
+```
+
+
+
+-------------------------
+MODEL BUILDING SECOND RUN
+-------------------------
+
+Following significance based on bivariate logistic regression model with mixed effect
+
+Setting the reference level for the model
+```{r}
+df$Species <- relevel(df$Species, ref = "Jabal?")
+df$Temporada <- relevel(df$Temporada, ref = "2011-2012")
+df$Age = relevel(df$Age, ref = "Juveniles")
+```
+
+
+1. Temporada
+```{r}
+fit_1 = summary(glmer(Result_Final ~ Temporada + (1 | Coto), data = df, family = "binomial"))
+str(fit_1)
+exp(fit_1$coefficients)
+```
+```{r}
+xtabs(~ Temporada + Densidad_ciervo_alta, data = df)
+```
+
+
+
+2. Fitting here the model during conversation with Nacho on Skype.
+```{r}
+fit_2 = summary(glmer(Result_Final ~ Temporada + Tamano_finca + Species + Age + (1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))))
+exp(fit_2$coefficients)
+```
+
+Interactions of the final best model by Nacho
+```{r}
+summary(glmer(Result_Final ~ Temporada + Tamano_finca + Species + Age + Temporada*Tamano_finca +(1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))))
+
+summary(glmer(Result_Final ~ Temporada + Tamano_finca + Species + Age + Temporada*Species + (1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))))
+
+summary(glmer(Result_Final ~ Temporada + Tamano_finca + Species + Age + Temporada*Age + (1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))))
+
+
+
+summary(glmer(Result_Final ~ Temporada + Tamano_finca + Species + Age + Tamano_finca*Species + (1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))))
+
+summary(glmer(Result_Final ~ Temporada + Tamano_finca + Species + Age + Tamano_finca*Age + (1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))))
+
+
+
+summary(glmer(Result_Final ~ Temporada + Tamano_finca + Species + Age + Species*Age + (1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))))
+```
+
+
+Looking into the best final model, that contains one interaction
+```{r}
+best_model = glmer(Result_Final ~ Temporada + Tamano_finca + Species + Age + Temporada*Tamano_finca +(1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000)))
+
+summary(best_model)
+
+exp(summary(best_model)$coefficients)
+```
+
+```{r}
+# compute 95% CI
+cc_wald = confint(best_model, parm = "beta_", method = "Wald") # less accurate but faster
+
+ctab_wald <- cbind(est = fixef(best_model), cc_wald)
+
+rtab_wald <- exp(ctab_wald)
+
+print(rtab_wald, digits=3)
+```
+
+
+
+Splitting Temporada in two categories instead of 3
+```{r}
+head(df)
+levels(df$Tamano_finca)
+
+df$Tamano_finca_recat = ifelse(df$Tamano_finca == "< 1000 ha", "< 1000 ha", "> 1000 ha")
+
+head(df, n = 12L)
+
+xtabs(~ Result_Final + Tamano_finca, data = df)
+xtabs(~ Result_Final + Tamano_finca_recat, data = df)
+```
+
+
+Fitting the same model as #2 but using the new variable for Tamano_finca
+```{r}
+fit_2_recat = summary(glmer(Result_Final ~ Temporada + Tamano_finca_recat + Species + Age + (1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))))
+exp(fit_2_recat$coefficients)
+```
+
+
+Fitting the interactions same as before but using the new categorization of Tamano_finca
+```{r}
+summary(glmer(Result_Final ~ Temporada + Tamano_finca_recat + Species + Age + Temporada*Tamano_finca_recat +(1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))))
+
+summary(glmer(Result_Final ~ Temporada + Tamano_finca_recat + Species + Age + Temporada*Species + (1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))))
+
+summary(glmer(Result_Final ~ Temporada + Tamano_finca_recat + Species + Age + Temporada*Age + (1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))))
+
+
+
+summary(glmer(Result_Final ~ Temporada + Tamano_finca_recat + Species + Age + Tamano_finca_recat*Species + (1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))))
+
+summary(glmer(Result_Final ~ Temporada + Tamano_finca_recat + Species + Age + Tamano_finca_recat*Age + (1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))))
+
+
+
+summary(glmer(Result_Final ~ Temporada + Tamano_finca_recat + Species + Age + Species*Age + (1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))))
+```
+
+
+
+Fitting Best Model using Tamano_finca as recategorized
+```{r}
+best_model_recat = glmer(Result_Final ~ Temporada + Tamano_finca_recat + Species + Age + Temporada*Tamano_finca_recat +(1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000)))
+
+summary(best_model_recat)
+
+exp(summary(best_model_recat)$coefficients)
+
+
+# compute 95% CI
+cc_wald = confint(best_model_recat, parm = "beta_", method = "Wald") # less accurate but faster
+
+ctab_wald <- cbind(est = fixef(best_model_recat), cc_wald)
+
+rtab_wald <- exp(ctab_wald)
+
+print(rtab_wald, digits=3)
+```
+
+```{r}
+trial_multilevel = glmer(Result_Final ~ Tamano_finca_recat + Species + Age +(1 | Temporada/Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000)))
+
+summary(trial_multilevel)
+
+exp(summary(best_model_recat)$coefficients)
+```
+
+
+Computing 95% CI for the contrasts:
+
+What is the difference between bigger hunting states and smaller hunting states in 2012-2013
+```{r}
+coef = coef(summary(best_model_recat))
+varcov = vcov(best_model_recat)
+vector = c(0, 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0)
+logRR = t(vector) %*% coef
+logRR
+RR = exp(logRR)
+RR
+
+se.RR = sqrt(t(vector) %*% varcov %*% vector)
+lower.bound = exp(logRR - (1.96*se.RR))
+lower.bound
+
+upper.bound = exp(logRR + (1.96*se.RR))
+upper.bound
+```
+
+Compute p-value for the OR in the contrast
+```{r}
+est = 2.974938
+l = log(4.74423)
+u = log(80.87836)
+se = (u - l)/(2*1.96)
+z = est/se
+
+2*pnorm(-abs(z))
+```
+
+
+
+What is the difference between bigger hunting states and smaller hunting states in 2013-2014
+```{r}
+coef = coef(summary(best_model_recat))
+varcov = vcov(best_model_recat)
+vector = c(0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 1)
+logRR = t(vector) %*% coef
+logRR
+RR = exp(logRR)
+RR
+
+se.RR = sqrt(t(vector) %*% varcov %*% vector)
+lower.bound = exp(logRR - (1.96*se.RR))
+lower.bound
+
+upper.bound = exp(logRR + (1.96*se.RR))
+upper.bound
+```
+
+Compute p-value for the OR in the contrast
+```{r}
+est = logRR[1]
+l = log(lower.bound[1])
+u = log(upper.bound[1])
+se = (u - l)/(2*1.96)
+z = est/se
+
+2*pnorm(-abs(z))
+```
+
+What is the difference between bigger hunting states and smaller hunting states in 2014-2015
+```{r}
+coef = coef(summary(best_model_recat))
+varcov = vcov(best_model_recat)
+vector = c(0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0)
+logRR = t(vector) %*% coef
+logRR
+RR = exp(logRR)
+RR
+
+se.RR = sqrt(t(vector) %*% varcov %*% vector)
+lower.bound = exp(logRR - (1.96*se.RR))
+lower.bound
+
+upper.bound = exp(logRR + (1.96*se.RR))
+upper.bound
+```
+
+Compute p-value for the OR in the contrast
+```{r}
+est = logRR[1]
+l = log(lower.bound[1])
+u = log(upper.bound[1])
+se = (u - l)/(2*1.96)
+z = est/se
+
+2*pnorm(-abs(z))
+```
+
+
+What is the difference between bigger hunting states and smaller hunting states in 2011-2012
+```{r}
+coef = coef(summary(best_model_recat))
+varcov = vcov(best_model_recat)
+vector = c(0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0)
+logRR = t(vector) %*% coef
+logRR
+RR = exp(logRR)
+RR
+
+se.RR = sqrt(t(vector) %*% varcov %*% vector)
+lower.bound = exp(logRR - (1.96*se.RR))
+lower.bound
+
+upper.bound = exp(logRR + (1.96*se.RR))
+upper.bound
+```
+
+
+Compute p-value for the OR in the contrast
+```{r}
+est = logRR[1]
+l = log(lower.bound[1])
+u = log(upper.bound[1])
+se = (u - l)/(2*1.96)
+z = est/se
+
+2*pnorm(-abs(z))
+```
+
+
+
+
+3. Tamano finca
+```{r}
+fit_3 = summary(glmer(Result_Final ~ Temporada + Presencia_rum_domes + Tamano_finca + (1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))))
+exp(fit_3$coefficients)
+```
+
+
+
+4. Species (failed to converge so used different optimazer)
+```{r}
+fit_4 = summary(glmer(Result_Final ~ Temporada + Presencia_rum_domes + Species + (1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))))
+exp(fit_4$coefficients)
+```
+
+
+
+5. Sex
+```{r}
+fit_5 = summary(glmer(Result_Final ~ Temporada + Presencia_rum_domes + Species + Sexo + (1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))))
+exp(fit_5$coefficients)
+```
+
+
+
+6. Age
+```{r}
+fit_6 = summary(glmer(Result_Final ~ Temporada + Presencia_rum_domes + Species + Sexo + Age + (1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))))
+exp(fit_6$coefficients)
+```
+
+
+
+7. Densidad Ciervo Alta
+```{r}
+fit_7 = summary(glmer(Result_Final ~ Temporada + Presencia_rum_domes + Species + Sexo + Age + Densidad_ciervo_alta + (1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))))
+exp(fit_7$coefficients)
+```
+
+
+
+7. Densidad Ciervo Alta but no Species
+```{r}
+fit_7a = summary(glmer(Result_Final ~ Temporada + Presencia_rum_domes + Sexo + Age + Densidad_ciervo_alta + (1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))))
+exp(fit_7a$coefficients)
+```
+
+
+
+8. Rios (keeping out Densidad_ciervo_alta for now)
+```{r}
+fit_8 = summary(glmer(Result_Final ~ Temporada + Presencia_rum_domes + Species + Sexo + Age + Rios + (1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))))
+exp(fit_8$coefficients)
+```
+
+
+
+9. Final Model with confounders
+```{r}
+fit_9 = summary(glmer(Result_Final ~ Temporada + Presencia_rum_domes + Species + Sexo + Age + Densidad_ciervo_alta + Rios + (1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))))
+exp(fit_9$coefficients)
+```
+
+
+------------
+INTERACTIONS
+------------
+
+
+
+```{r}
+# Temporada * Presencia rumiantes domesticos
+summary(glmer(Result_Final ~  Temporada + Presencia_rum_domes + Species + Sexo + Age + Densidad_ciervo_alta + Rios + Temporada*Presencia_rum_domes + (1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))))
+
+
+# Temporada * Species
+summary(glmer(Result_Final ~  Temporada + Presencia_rum_domes + Species + Sexo + Age + Densidad_ciervo_alta + Rios + Temporada*Species + (1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))))
+
+
+# Temporada * Sexo
+summary(glmer(Result_Final ~  Temporada + Presencia_rum_domes + Species + Sexo + Age + Densidad_ciervo_alta + Rios + Temporada*Sexo + (1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))))
+
+
+# Temporada * Age
+summary(glmer(Result_Final ~  Temporada + Presencia_rum_domes + Species + Sexo + Age + Densidad_ciervo_alta + Rios + Temporada*Age + (1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))))
+
+# Temporada * Densidad_ciervo_alta
+summary(glmer(Result_Final ~  Temporada + Presencia_rum_domes + Species + Sexo + Age + Densidad_ciervo_alta + Rios + Temporada*Densidad_ciervo_alta + (1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))))
+
+
+# Temporada * Rios
+summary(glmer(Result_Final ~  Temporada + Presencia_rum_domes + Species + Sexo + Age + Densidad_ciervo_alta + Rios + Temporada*Rios + (1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))))
+```
+
+
+
+```{r}
+# Presencia rumiantes domesticos * Species
+summary(glmer(Result_Final ~  Temporada + Presencia_rum_domes + Species + Sexo + Age + Densidad_ciervo_alta + Rios + Presencia_rum_domes*Species + (1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))))
+
+
+# Presencia_rum_domes * Sexo
+summary(glmer(Result_Final ~  Temporada + Presencia_rum_domes + Species + Sexo + Age + Densidad_ciervo_alta + Rios + Presencia_rum_domes*Sexo + (1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))))
+
+
+# Presen_rum_domes * Age
+summary(glmer(Result_Final ~  Temporada + Presencia_rum_domes + Species + Sexo + Age + Densidad_ciervo_alta + Rios + Presencia_rum_domes*Age + (1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))))
+
+
+# Presencia_rum_domes * Densidad_ciervo_alta
+summary(glmer(Result_Final ~  Temporada + Presencia_rum_domes + Species + Sexo + Age + Densidad_ciervo_alta + Rios + Presencia_rum_domes*Densidad_ciervo_alta + (1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))))
+
+# Presencia_rum_domes * Rios
+summary(glmer(Result_Final ~  Temporada + Presencia_rum_domes + Species + Sexo + Age + Densidad_ciervo_alta + Rios + Presencia_rum_domes*Rios + (1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))))
+```
+
+
+
+```{r}
+# Species * Sexo
+summary(glmer(Result_Final ~  Temporada + Presencia_rum_domes + Species + Sexo + Age + Densidad_ciervo_alta + Rios + Species*Sexo + (1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))))
+
+
+# Species * Age
+summary(glmer(Result_Final ~  Temporada + Presencia_rum_domes + Species + Sexo + Age + Densidad_ciervo_alta + Rios + Species*Sexo + (1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))))
+
+
+# Species * Densidad_ciervo_alta
+summary(glmer(Result_Final ~  Temporada + Presencia_rum_domes + Species + Sexo + Age + Densidad_ciervo_alta + Rios + Species*Densidad_ciervo_alta + (1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))))
+
+
+# Species * Rios
+summary(glmer(Result_Final ~  Temporada + Presencia_rum_domes + Species + Sexo + Age + Densidad_ciervo_alta + Rios + Species*Rios + (1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))))
+```
+
+
+
+```{r}
+# Sexo * Age
+summary(glmer(Result_Final ~  Temporada + Presencia_rum_domes + Species + Sexo + Age + Densidad_ciervo_alta + Rios + Sexo*Age + (1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))))
+
+
+# Sexo * Densidad_ciervo_alta
+summary(glmer(Result_Final ~  Temporada + Presencia_rum_domes + Species + Sexo + Age + Densidad_ciervo_alta + Rios + Sexo*Densidad_ciervo_alta + (1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))))
+
+
+# Sexo * Rios
+summary(glmer(Result_Final ~  Temporada + Presencia_rum_domes + Species + Sexo + Age + Densidad_ciervo_alta + Rios + Sexo*Rios + (1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))))
+```
+
+
+
+```{r}
+# Age * Densidad_ciervo_alta
+summary(glmer(Result_Final ~  Temporada + Presencia_rum_domes + Species + Sexo + Age + Densidad_ciervo_alta + Rios + Age*Densidad_ciervo_alta + (1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))))
+
+
+# Age * Rios
+summary(glmer(Result_Final ~  Temporada + Presencia_rum_domes + Species + Sexo + Age + Densidad_ciervo_alta + Rios + Age*Rios + (1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))))
+```
+
+
+
+```{r}
+# Densidad_ciervo_alta * Rios
+summary(glmer(Result_Final ~  Temporada + Presencia_rum_domes + Species + Sexo + Age + Densidad_ciervo_alta + Rios + Densidad_ciervo_alta*Rios + (1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))))
+```
+
+
+
+Best fitting model
+```{r}
+# Sexo * Age
+fit_10 = summary(glmer(Result_Final ~  Temporada + Presencia_rum_domes + Species + Sexo + Age + Densidad_ciervo_alta + Rios + Sexo*Age + (1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))))
+exp(fit_10$coefficients)
+```
+
+
+
+------------------------
+MODEL BUILDING THIRD RUN
+------------------------
+
+
+1. Tamano finca
+```{r}
+fit_1 = summary(glmer(Result_Final ~ Tamano_finca + (1 | Coto), data = df, family = "binomial"))
+exp(fit_1$coefficients)
+```
+
+
+2. Temporada
+```{r}
+fit_2 = summary(glmer(Result_Final ~ Tamano_finca + Temporada + (1 | Coto), data = df, family = "binomial"))
+exp(fit_2$coefficients)
+```
+
+
+
+3. Presencia rumiantes domesticos
+```{r}
+fit_3 = summary(glmer(Result_Final ~ Tamano_finca + Temporada + Presencia_rum_domes + (1 | Coto), data = df, family = "binomial"))
+exp(fit_3$coefficients)
+```
+
+
+4. Species
+```{r}
+fit_4 = summary(glmer(Result_Final ~ Tamano_finca + Temporada + Species + (1 | Coto), data = df, family = "binomial"))
+exp(fit_4$coefficients)
+```
+
+
+
+5. Rios (failed to converge)
+```{r}
+fit_5 = summary(glmer(Result_Final ~ Tamano_finca + Temporada + Species + Rios + (1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))))
+exp(fit_5$coefficients)
+```
+
+
+6. Sexo
+```{r}
+fit_6 = summary(glmer(Result_Final ~ Tamano_finca + Temporada + Species + Sexo + (1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))))
+exp(fit_6$coefficients)
+```
+
+
+7. Age
+```{r}
+fit_7 = summary(glmer(Result_Final ~ Tamano_finca + Temporada + Species + Sexo + Age + (1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))))
+exp(fit_7$coefficients)
+```
+
+
+8. Densidad ciervo alta
+```{r}
+fit_8 = summary(glmer(Result_Final ~ Tamano_finca + Temporada + Species + Sexo + Age + Densidad_ciervo_alta + (1 | Coto), data = df, family = "binomial", glmerControl(optimizer = "bobyqa", optCtrl = list(maxfun = 100000))))
+exp(fit_8$coefficients)
+```
+
